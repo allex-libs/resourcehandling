@@ -1,6 +1,6 @@
 {
   "name": "allex_resourcehandlinglib",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "AllexJS lib with helpers for handling resources",
   "main": "index.js",
   "scripts": {

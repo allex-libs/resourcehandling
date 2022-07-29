@@ -29,14 +29,9 @@ function createResourceHandlerMixin (lib, outerlib, mylib) {
     }
   };
   ResourceHandlingJobCore.prototype.getResource = function () {
-    return this.handler.resource || this.handler.acquireResource(this.handler.resourceHandlingOptions);
+    return this.handler.getHoldOfResource();
   };
   ResourceHandlingJobCore.prototype.onResource = function (res) {
-    if (!this.handler.isResourceUsable(res)) {
-      this.handler.resource = null;
-      return q.delay(this.getResource(), 10*lib.intervals.Second);
-    }
-    this.handler.resource = res;
     return this.handler[this.methodname].apply(
       this.handler,
       Array.prototype.concat.apply([res], this.args)
@@ -49,19 +44,58 @@ function createResourceHandlerMixin (lib, outerlib, mylib) {
     'onResource'
   ];
 
+  function ResourceAcquiringJobCore (reshandler) {
+    this.handler = reshandler;
+  }
+  ResourceAcquiringJobCore.prototype.destroy = function () {
+    this.handler = null;
+  };
+  ResourceAcquiringJobCore.prototype.shouldContinue = function () {
+    if (!this.handler) {
+      return new lib.Error('NO_RESOURCE_HANDLER');
+    }
+  };
+  ResourceAcquiringJobCore.prototype.getResource = function () {
+    return qlib.thenableRead(this.handler.resource || this.handler.acquireResource(this.handler.resourceHandlingOptions)).then(this.resourceChecker.bind(this));
+  };
+  ResourceAcquiringJobCore.prototype.onResource = function (res) {
+    this.handler.resource = res;
+    return res;
+  };
 
-  var _resourceHandlingChannel = 'reshandling';
+  ResourceAcquiringJobCore.prototype.steps = [
+    'getResource',
+    'onResource'
+  ];
+
+  ResourceAcquiringJobCore.prototype.resourceChecker = function (res) {
+    var destres;
+    if (!this.handler.isResourceUsable(res)) {
+      destres = qlib.thenableRead(res ? this.handler.destroyResource(res) : null);
+      this.handler.resource = null;
+      return q.delay(10*lib.intervals.Second, destres).then(this.getResource.bind(this));
+    }
+    return res;
+  };
 
   function ResourceHandlerMixin (options) {
     this.resourceHandlingOptions = options;
     this.resource = null;
+    this.resourceQ = new qlib.JobCollection();
   }
   ResourceHandlerMixin.prototype.destroy = function () {
+    if (this.resourceQ) {
+      this.resourceQ.destroy();
+    }
+    this.resourceQ = null;
     if (this.resource) {
       this.destroyResource(this.resource);
     }
     this.resource = null;
     this.resourceHandlingOptions = null;
+  };
+  ResourceHandlerMixin.prototype.getHoldOfResource = function () {
+    return this.resourceQ.run('.', qlib.newSteppedJobOnSteppedInstance(new ResourceAcquiringJobCore(this)));
   };
   ResourceHandlerMixin.prototype.resourceHandlingJob = function (methodname, args) {
     return (qlib.newSteppedJobOnSteppedInstance(new ResourceHandlingJobCore(this, methodname, args)));
@@ -82,6 +116,7 @@ function createResourceHandlerMixin (lib, outerlib, mylib) {
       , 'acquireResource'
       , 'isResourceUsable'
       , 'destroyResource'
+      , 'getHoldOfResource'
       , 'resourceHandlingJob'
     );
   };
